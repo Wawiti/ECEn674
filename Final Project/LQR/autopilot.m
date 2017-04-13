@@ -38,15 +38,12 @@ function y = autopilot(uu,P)
     
     autopilot_version = 2;
         % autopilot_version == 1 <- used for tuning
-        % autopilot_version == 2 <- standard autopilot defined in book
-        % autopilot_version == 3 <- Total Energy Control for longitudinal AP
+        % autopilot_version == 2 <- LQR Control for longitudinal AP
     switch autopilot_version
         case 1,
            [delta, x_command] = autopilot_tuning(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P);
         case 2,
-           [delta, x_command] = autopilot_uavbook(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P);
-        case 3,
-               [delta, x_command] = autopilot_TECS(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P);
+           [delta, x_command] = autopilot_LQR(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P);
     end
     y = [delta; x_command];
 end
@@ -134,10 +131,10 @@ function [delta, x_command] = autopilot_tuning(Va_c,h_c,chi_c,Va,h,chi,phi,theta
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% autopilot_uavbook
-%   - autopilot defined in the uavbook
+% autopilot_LQR
+%   - longitudinal autopilot based on Linear Quadratic Regulator
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function [delta, x_command] = autopilot_uavbook(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P)
+function [delta, x_command] = autopilot_LQR(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P)
 
     %----------------------------------------------------------
     % lateral autopilot
@@ -150,102 +147,15 @@ function [delta, x_command] = autopilot_uavbook(Va_c,h_c,chi_c,Va,h,chi,phi,thet
         phi_c   = course_hold(chi_c, chi, r, 0, P);
         delta_r = 0;%coordinated_turn_hold(beta, 0, P);
     end
-    delta_a = roll_hold(phi_c, phi, p, P);     
+    delta_a = roll_hold(phi_c, phi, p, P);       
   
     
     %----------------------------------------------------------
-    % longitudinal autopilot
+    % longitudinal autopilot based on LQR
     
-    % define persistent variable for state of altitude state machine
-    persistent altitude_state;
-    persistent initialize_integrator;
-    % initialize persistent variable
-    if t>=0,
-        if h<=P.altitude_take_off_zone,     
-            altitude_state = 1;
-        elseif h<=h_c-P.altitude_hold_zone, 
-            altitude_state = 2;
-        elseif h>=h_c+P.altitude_hold_zone, 
-            altitude_state = 3;
-        else
-            altitude_state = 4;
-        end
-        initialize_integrator = 1;
-    end
-    
-    % implement state machine
-    switch altitude_state,
-        case 1,  % in take-off zone
-            delta_t = 0.5;
-			theta_c = P.theta_max;
-        case 2,  % climb zone
-            delta_t = 0.5;
-			theta_c = airspeed_with_pitch_hold(Va_c, Va, 0, P);
-        case 3, % descend zone
-			delta_t = 0;
-			theta_c = airspeed_with_pitch_hold(Va_c, Va, 0, P);
-        case 4, % altitude hold zone
-			delta_t = airspeed_with_throttle_hold(Va_c, Va, flag, P);
-			theta_c = altitude_hold(h_c, h, flag, P);
-    end
-    
-    delta_e = pitch_hold(theta_c, theta, q, P);
-    % artificially saturation delta_t
-    delta_t = sat(delta_t,1,0);
- 
-    
-    %----------------------------------------------------------
-    % create outputs
-    
-    % control outputs
-    delta = [delta_e; delta_a; delta_r; delta_t];
-    % commanded (desired) states
-    x_command = [...
-        0;...                    % pn
-        0;...                    % pe
-        h_c;...                  % h
-        Va_c;...                 % Va
-        0;...                    % alpha
-        0;...                    % beta
-        phi_c;...                % phi
-        %theta_c*P.K_theta_DC;... % theta
-        theta_c;
-        chi_c;...                % chi
-        0;...                    % p
-        0;...                    % q
-        0;...                    % r
-        ];
-            
-    y = [delta; x_command];
- 
-    end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% autopilot_TECS
-%   - longitudinal autopilot based on total energy control systems
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function [delta, x_command] = autopilot_TECS(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P)
-
-    %----------------------------------------------------------
-    % lateral autopilot
-    if t==0,
-        % assume no rudder, therefore set delta_r=0
-        delta_r = 0;%coordinated_turn_hold(beta, 1, P);
-        phi_c   = course_hold(chi_c, chi, r, 1, P);
-
-    else
-        phi_c   = course_hold(chi_c, chi, r, 0, P);
-        delta_r = 0;%coordinated_turn_hold(beta, 0, P);
-    end
-    delta_a = roll_hold(phi_c, phi, p, P);     
-  
-    
-    %----------------------------------------------------------
-    % longitudinal autopilot based on total energy control
-    
-    
-    delta_e = 0;
-    delta_t = 0;
+    output = lqrfunction(u, w, q, theta, h, h_c, Va_c);
+    delta_e = output(1);
+    delta_t = output(2);
  
     
     %----------------------------------------------------------
@@ -274,8 +184,6 @@ function [delta, x_command] = autopilot_TECS(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p
  
 end
    
-
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Autopilot functions
@@ -329,79 +237,24 @@ end
 % ---------------------------------------------------------
 %               Longitudinal Autopilot Functions
 % --------------------------------------------------------- 
-function theta_c = airspeed_with_pitch_hold(Va_c, Va, flag, P)
-	persistent integrator;
-	persistent error_d1;
-	if isempty(integrator) % reset (initialize) persistent variables when flag==1
-        integrator = 0;
-        error_d1 = 0;
+function output = lqrfunction(u, w, q, theta, h, h_c, Va_c)
+    persistent integrator;
+    persistent error_d1;
+    H_lon = [0 0 0 0 1; 1/Va 1/Va 0 0 0];       % Augmentation for LQR Integrator
+    x_lon = [u w q theta h]';
+    if isempty(integrator) % reset (initialize) persistent variables when flag==1
+        integrator = [0;0];
+        error_d1 = [0;0];
     end
-	error = Va_c - Va;											% Current Error
-	integrator = integrator + (P.Ts / 2) * (error + error_d1); 	% Update Integrator
-	error_d1 = error;											% Set error memory
-	theta_c = sat(...						% PI Controller
-		P.kp_v2 * error +...				% Proportional
-		P.ki_v2 * integrator,...			% Integral
-		P.theta_max, -P.theta_max);			% maximum and minimum pitch
-	if P.ki_v2 ~= 0							% Keep the integrator from winding up
-		u_unsat = P.kp_v2 * error + P.ki_v2 * integrator;
-		integrator = integrator + P.Ts / P.ki_v2 * (theta_c-u_unsat);
-	end
+    error = H_lon*x_lon-[h; Va];                                            % Current Error in Altitude and airspeed
+	integrator = integrator + (P.Ts / 2) .* (error + error_d1);             % Update Integrator
+	error_d1 = error;                                                       % Set error memory
+    xAug_lon = [u w q theta h integrator(1) integrator(2)];                 % Augmented x matrix
+    Abar_lon = [A_lon 0; H_lon 0];                                          % Augmented A matrix
+    Bbar_lon = [B_lon; 0];                                                  % Augmented B matrix
+    [K,~,~] = lqr(Abar_lon, Bbar_lon, Q, R);                                % Solve for LQR parameters
+    output = -K * xAug_lon;                                                 % Solve for output
 end
-
-function delta_e = pitch_hold(theta_c, theta, q, P)
-	persistent error_d1;
-	if isempty(error_d1) % reset (initialize) persistent variables when flag==1
-        error_d1 = 0;
-    end
-	error = theta_c - theta;									% Current Error
-	error_d1 = error;											% Set error memory
-	delta_e = sat(...						% PD Controller
-		P.kp_theta * error -...				% Proportional
-		P.kd_theta * q,...					% Derivative
-		P.delta_e_max, -P.delta_e_max);		% maximum deflection
-end
-
-function delta_t = airspeed_with_throttle_hold(Va_c, Va, flag, P)
-	persistent integrator;
-	persistent error_d1;
-	if isempty(integrator) % reset (initialize) persistent variables when flag==1
-        integrator = 0;
-        error_d1 = 0;
-    end
-	error = Va_c - Va;											% Current Error
-	integrator = integrator + (P.Ts / 2) * (error + error_d1); 	% Update Integrator
-	error_d1 = error;											% Set error memory
-	delta_t = sat(...						% PI Controller
-		P.kp_v * error +...					% Proportional
-		P.ki_v * integrator,...				% Integral
-		P.delta_t_max, 0);		% maximum deflection
-	if P.ki_v ~= 0							% Keep the integrator from winding up
-		u_unsat = P.kp_v * error + P.ki_v * integrator;
-		integrator = integrator + P.Ts / P.ki_v * (delta_t - u_unsat);
-	end
-end
-
-function theta_c = altitude_hold(h_c, h, flag, P)
-	persistent integrator;
-	persistent error_d1;
-	if isempty(integrator) % reset (initialize) persistent variables when flag==1
-        integrator = 0;
-        error_d1 = 0;
-    end
-	error = h_c - h;											% Current Error
-	integrator = integrator + (P.Ts / 2) * (error + error_d1); 	% Update Integrator
-	error_d1 = error;											% Set error memory
-	theta_c = sat(...						% PI Controller
-		P.kp_h * error +...					% Proportional
-		P.ki_h * integrator,...				% Integral
-		P.theta_max, -P.theta_max);			% maximum aileron deflection
-	if P.ki_h ~= 0							% Keep the integrator from winding up
-		u_unsat = P.kp_h * error + P.ki_h * integrator;
-		integrator = integrator + P.Ts / P.ki_h * (theta_c-u_unsat);
-	end
-end
-
 
   
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
