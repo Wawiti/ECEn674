@@ -14,8 +14,8 @@ function y = autopilot(uu,P)
 %    pe       = uu(2+NN);  % inertial East position
     h        = uu(3+NN);  % altitude
     Va       = uu(4+NN);  % airspeed
-%    alpha    = uu(5+NN);  % angle of attack
-%    beta     = uu(6+NN);  % side slip angle
+    alpha    = uu(5+NN);  % angle of attack
+    beta     = uu(6+NN);  % side slip angle
     phi      = uu(7+NN);  % roll angle
     theta    = uu(8+NN);  % pitch angle
     chi      = uu(9+NN);  % course angle
@@ -43,7 +43,7 @@ function y = autopilot(uu,P)
         case 1,
            [delta, x_command] = autopilot_tuning(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P);
         case 2,
-           [delta, x_command] = autopilot_LQR(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P);
+           [delta, x_command] = autopilot_LQR(Va_c,h_c,chi_c,Va,alpha,beta,h,chi,phi,theta,p,q,r,t,P);
     end
     y = [delta; x_command];
 end
@@ -61,7 +61,7 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function [delta, x_command] = autopilot_tuning(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P)
 
-    mode = 5;
+    mode = 1;
     switch mode
         case 1, % tune the roll loop
             phi_c = chi_c; % interpret chi_c to autopilot as course command
@@ -134,7 +134,7 @@ end
 % autopilot_LQR
 %   - longitudinal autopilot based on Linear Quadratic Regulator
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function [delta, x_command] = autopilot_LQR(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P)
+function [delta, x_command] = autopilot_LQR(Va_c,h_c,chi_c,Va,alpha,beta,h,chi,phi,theta,p,q,r,t,P)
 
     %----------------------------------------------------------
     % lateral autopilot
@@ -153,10 +153,13 @@ function [delta, x_command] = autopilot_LQR(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,
     %----------------------------------------------------------
     % longitudinal autopilot based on LQR
     
-    output = lqrfunction(u, w, q, theta, h, h_c, Va_c);
+    output = lqrfunction(Va, alpha, beta, q, theta, h, h_c, Va_c, P);
     delta_e = output(1);
-    delta_t = output(2);
+    delta_t = -output(2);
+    theta_c = 0;
  
+    delta_e = sat(delta_e, P.delta_e_max, -P.delta_e_max);
+    delta_t = sat(delta_t, 0.75, 0);
     
     %----------------------------------------------------------
     % create outputs
@@ -226,10 +229,10 @@ function phi_c = course_hold(chi_c, chi, r, flag, P)
 	error_d1 = error;											% Set error memory
 	phi_c = sat(...							% PID Controller
 		P.kp_chi * error +...				% Proportional
-		P.ki_chi * integrator-r,...			% Integral
+		P.ki_chi * integrator,...			% Integral
 		P.phi_max, -P.phi_max);				% maximum aileron deflection
 	if P.ki_chi ~= 0						% Keep the integrator from winding up
-		u_unsat = P.kp_chi * error + P.ki_chi * integrator-r;
+		u_unsat = P.kp_chi * error + P.ki_chi * integrator;
 		integrator = integrator + P.Ts / P.ki_chi * (phi_c-u_unsat);
 	end
 end
@@ -237,23 +240,28 @@ end
 % ---------------------------------------------------------
 %               Longitudinal Autopilot Functions
 % --------------------------------------------------------- 
-function output = lqrfunction(u, w, q, theta, h, h_c, Va_c)
+function output = lqrfunction(Va, alpha, beta, q, theta, h, h_c, Va_c,P)
     persistent integrator;
     persistent error_d1;
-    H_lon = [0 0 0 0 1; 1/Va 1/Va 0 0 0];       % Augmentation for LQR Integrator
-    x_lon = [u w q theta h]';
+    %x_lon = [u w q theta h]';
     if isempty(integrator) % reset (initialize) persistent variables when flag==1
         integrator = [0;0];
         error_d1 = [0;0];
     end
-    error = H_lon*x_lon-[h; Va];                                            % Current Error in Altitude and airspeed
-	integrator = integrator + (P.Ts / 2) .* (error + error_d1);             % Update Integrator
-	error_d1 = error;                                                       % Set error memory
+    error = [h; Va]-[h_c; Va_c];           % Current Error in Altitude and airspeed
+	u = cos(alpha)*cos(beta);
+    w = sin(alpha)*cos(beta);
+    
+    if(abs(theta) > P.theta_max)
+        % Do nothing, don't change the integrator
+    else
+        % Integrate
+        integrator = integrator + (P.Ts / 2) .* (error + error_d1)              % Update Integrator
+        error_d1 = error;                                                       % Set error memory
+    end
     xAug_lon = [u w q theta h integrator(1) integrator(2)];                 % Augmented x matrix
-    Abar_lon = [A_lon 0; H_lon 0];                                          % Augmented A matrix
-    Bbar_lon = [B_lon; 0];                                                  % Augmented B matrix
-    [K,~,~] = lqr(Abar_lon, Bbar_lon, Q, R);                                % Solve for LQR parameters
-    output = -K * xAug_lon;                                                 % Solve for output
+    
+    output = -P.K * xAug_lon';                                              % Solve for output
 end
 
   
