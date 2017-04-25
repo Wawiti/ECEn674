@@ -160,36 +160,12 @@ function [delta, x_command] = autopilot_uavbook(Va_c,h_c,chi_c,Va,h,chi,phi,thet
     persistent altitude_state;
     persistent initialize_integrator;
     % initialize persistent variable
-    if t>=0,
-        if h<=P.altitude_take_off_zone,     
-            altitude_state = 1;
-        elseif h<=h_c-P.altitude_hold_zone, 
-            altitude_state = 2;
-        elseif h>=h_c+P.altitude_hold_zone, 
-            altitude_state = 3;
-        else
-            altitude_state = 4;
-        end
-        initialize_integrator = 1;
-    end
+    h_c_filtered = sat(h_c, h+P.altitude_hold_zone, h-P.altitude_hold_zone);
+    theta_c = altitude_hold(h_c_filtered, h, 0, P);
     
-    % implement state machine
-    switch altitude_state,
-        case 1,  % in take-off zone
-            delta_t = 0.5;
-			theta_c = P.theta_max;
-        case 2,  % climb zone
-            delta_t = 0.5;
-			theta_c = airspeed_with_pitch_hold(Va_c, Va, 0, P);
-        case 3, % descend zone
-			delta_t = 0;
-			theta_c = airspeed_with_pitch_hold(Va_c, Va, 0, P);
-        case 4, % altitude hold zone
-			delta_t = airspeed_with_throttle_hold(Va_c, Va, flag, P);
-			theta_c = altitude_hold(h_c, h, flag, P);
-    end
-    
+    delta_t = airspeed_with_throttle_hold(Va_c, Va, 0, P);
     delta_e = pitch_hold(theta_c, theta, q, P);
+    
     % artificially saturation delta_t
     delta_t = sat(delta_t,1,0);
  
