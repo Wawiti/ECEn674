@@ -128,7 +128,7 @@ P.x_trim = x_trim;
 % initial conditions
 P.pn0    = 0;  % initial North position
 P.pe0    = 0;  % initial East position
-P.pd0    = 0;  % initial Down position (negative altitude)
+P.pd0    = -100;  % initial Down position (negative altitude)
 P.u0     = x_trim(4);  % initial velocity along body x-axis
 P.v0     = x_trim(5);  % initial velocity along body y-axis
 P.w0     = x_trim(6);  % initial velocity along body z-axis
@@ -147,6 +147,15 @@ P.r0     = x_trim(12);  % initial body frame yaw rate
 [A_lon, B_lon, A_lat, B_lat] = compute_ss_model('mavsim_trim',x_trim,u_trim);
 
 compute_gains;
+
+P.kp_tecs_tot = 1;
+P.kd_tecs_tot = 2;
+P.ki_tecs_tot = 0.5;
+
+P.kp_tecs_bal = 2.5;
+P.kd_tecs_bal = 1.5;
+P.ki_tecs_bal = 0.5;
+
 P.altitude_take_off_zone = 50;
 P.altitude_hold_zone = 15;	 
 					 
