@@ -242,10 +242,17 @@ function [delta, x_command] = autopilot_TECS(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p
     
     %----------------------------------------------------------
     % longitudinal autopilot based on total energy control
+    E_K_nom = 0.5*P.mass*P.Va0^2;
     
+    E_K = 0.5*P.mass*(Va_c^2-Va^2);
+    E_P = P.mass*P.gravity*(h_c-h);
     
-    delta_e = 0;
-    delta_t = 0;
+    E_tot = (E_K + E_P)/E_K_nom;
+    E_diff = (E_P - E_K)/E_K_nom;
+    
+    delta_t = throttle_TECS(E_tot,P);
+    theta_c = theta_TECS(E_diff,P);
+    delta_e = pitch_hold(theta_c, theta, q, P);
  
     
     %----------------------------------------------------------
@@ -402,6 +409,61 @@ function theta_c = altitude_hold(h_c, h, flag, P)
 	end
 end
 
+function delta_t = throttle_TECS(E_tot, P)
+
+    persistent integrator
+    persistent differentiator
+    persistent error_d1
+    
+    if isempty(integrator)
+        integrator = 0;
+        differentiator = 0;
+        error_d1 = 0;
+    end
+    
+    error = E_tot;
+    integrator = integrator + (P.Ts/2)*(error+error_d1);
+    
+    differentiator = (2*P.tau-P.Ts)/(2*P.tau+P.Ts)*differentiator +...
+        2/(2*P.tau+P.Ts)*(error - error_d1);
+    
+    u_unsat = P.kp_tecs_tot*error + P.kd_tecs_tot*differentiator + P.ki_tecs_tot*integrator;
+    delta_t = sat(u_unsat,1,0);
+    
+    if P.ki_tecs_tot ~= 0
+        integrator = integrator + (P.Ts/P.ki_tecs_tot)*(delta_t-u_unsat);
+    end
+    
+    error_d1 = error;
+    
+end
+
+function theta_c = theta_TECS(E_diff,P)
+
+    persistent integrator differentiator error_d1
+    
+    if isempty(integrator)
+        integrator = 0;
+        differentiator = 0;
+        error_d1 = 0;
+    end
+    
+    error = E_diff;
+    integrator = integrator + (P.Ts/2)*(error+error_d1);
+    
+    differentiator = (2*P.tau-P.Ts)/(2*P.tau+P.Ts)*differentiator +...
+        2/(2*P.tau+P.Ts)*(error - error_d1);
+    
+    u_unsat = P.kp_tecs_bal*error + P.kd_tecs_bal*differentiator + P.ki_tecs_bal*integrator;
+    theta_c = sat(u_unsat,1,0);
+    
+    if P.ki_tecs_bal ~= 0
+        integrator = integrator + (P.Ts/P.ki_tecs_bal)*(theta_c-u_unsat);
+    end
+    
+    error_d1 = error;
+
+end
 
   
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
