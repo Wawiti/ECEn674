@@ -43,7 +43,7 @@ function y = autopilot(uu,P)
         case 1,
            [delta, x_command] = autopilot_tuning(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P);
         case 2,
-           [delta, x_command] = autopilot_LQR(Va_c,h_c,chi_c,Va,alpha,beta,h,chi,phi,theta,p,q,r,t,P);
+           [delta, x_command] = autopilot_LQR(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P);
     end
     y = [delta; x_command];
 end
@@ -134,7 +134,7 @@ end
 % autopilot_LQR
 %   - longitudinal autopilot based on Linear Quadratic Regulator
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function [delta, x_command] = autopilot_LQR(Va_c,h_c,chi_c,Va,alpha,beta,h,chi,phi,theta,p,q,r,t,P)
+function [delta, x_command] = autopilot_LQR(Va_c,h_c,chi_c,Va,h,chi,phi,theta,p,q,r,t,P)
 
     %----------------------------------------------------------
     % lateral autopilot
@@ -153,9 +153,9 @@ function [delta, x_command] = autopilot_LQR(Va_c,h_c,chi_c,Va,alpha,beta,h,chi,p
     %----------------------------------------------------------
     % longitudinal autopilot based on LQR
     
-    output = lqrfunction(Va, alpha, beta, q, theta, h, h_c, Va_c, P);
+    output = lqrfunction(Va, q, theta, h, h_c, Va_c, P);
     delta_e = output(1);
-    delta_t = -output(2);
+    delta_t = output(2);
     theta_c = 0;
  
     delta_e = sat(delta_e, P.delta_e_max, -P.delta_e_max);
@@ -240,30 +240,38 @@ end
 % ---------------------------------------------------------
 %               Longitudinal Autopilot Functions
 % --------------------------------------------------------- 
-function output = lqrfunction(Va, alpha, beta, q, theta, h, h_c, Va_c,P)
+function output = lqrfunction(Va, q, theta, h, h_c, Va_c,P)
     persistent integrator;
     persistent error_d1;
-    %x_lon = [u w q theta h]';
     if isempty(integrator) % reset (initialize) persistent variables when flag==1
         integrator = [0;0];
         error_d1 = [0;0];
     end
-    error = [h; Va]-[h_c; Va_c];           % Current Error in Altitude and airspeed
-	u = cos(alpha)*cos(beta);
-    w = sin(alpha)*cos(beta);
+    error = ([h; Va]-[h_c; Va_c]);           % Current Error in Altitude and airspeed
+	error(1) = sat(error(1),2,-2);
+    error(2) = sat(error(2),2,-2);
+    u = (Va-Va_c)*cos(theta);
+    w = (Va-Va_c)*sin(theta);
     
-    if(abs(theta) > P.theta_max)
-        % Do nothing, don't change the integrator
-    else
-        % Integrate
-        integrator = integrator + (P.Ts / 2) .* (error + error_d1)              % Update Integrator
-        error_d1 = error;                                                       % Set error memory
-    end
-    xAug_lon = [u w q theta h integrator(1) integrator(2)];                 % Augmented x matrix
+    integrator = integrator + (P.Ts / 2) .* (error + error_d1);              % Update Integrator
+    error_d1 = error;                                                       % Set error memory
+    
+    xAug_lon = [u w q theta h-h_c integrator(1) integrator(2)];                 % Augmented x matrix
     
     output = -P.K * xAug_lon';                                              % Solve for output
 end
 
+
+% if(abs(theta) > P.theta_max)
+%         % Do nothing, don't change the integrator
+%         integrator = integrator - (P.Ts / 2) .* (error + error_d1)              % Update Integrator
+%         error_d1 = error;                                                       % Set error memory
+%     else
+%         % Integrate
+%         integrator = integrator + (P.Ts / 2) .* (error + error_d1)              % Update Integrator
+%         %integrator = integrator + P.Ts .* error;
+%         error_d1 = error;                                                       % Set error memory
+%     end
   
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % sat
