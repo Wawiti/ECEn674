@@ -128,7 +128,7 @@ P.x_trim = x_trim;
 % initial conditions
 P.pn0    = 0;  % initial North position
 P.pe0    = 0;  % initial East position
-P.pd0    = 0;  % initial Down position (negative altitude)
+P.pd0    = -100;  % initial Down position (negative altitude)
 P.u0     = x_trim(4);  % initial velocity along body x-axis
 P.v0     = x_trim(5);  % initial velocity along body y-axis
 P.w0     = x_trim(6);  % initial velocity along body z-axis
@@ -151,13 +151,26 @@ P.altitude_take_off_zone = 50;
 P.altitude_hold_zone = 15;	 
 					 
 % Tuneable parameters for LQR Autopilot
-Q = diag([1 1 10 100000 100 0.1 0.1]);                  % Q = diag(u w q thet h I I2)
-R = diag([10000 1]);                            % R = diag(rdElev rdThrot)Q    
-H_lon = [0 0 0 0 1; 1/P.Va0 1/P.Va0 0 0 0];       % Augmentation for LQR Integrator
-Abar_lon = [A_lon zeros(size(A_lon,1),2); H_lon zeros(size(H_lon,1),2)];              % Augmented A matrix
-Bbar_lon = [B_lon; zeros(2,size(B_lon,2))];                      % Augmented B matrix
+Q = 1*diag([10 ...                   % u
+            10 ...                   % w
+            1 ...                   % q
+            0 ...                   % theta
+            0.04 ...                % h
+            1 ...                   % Integr 1 (h)
+            1]);                  	% Integr 2 (Va)
+        
+R = 10*diag([1 ...                  % Elevator
+            1]);                    % Throttle    
+
+H_lon = [0          0       0   0   1;...
+         1/P.Va0    1/P.Va0 0   0   0];       % Augmentation for LQR Integrator
+     
+Abar_lon = [A_lon   zeros(size(A_lon,1),2);...
+            H_lon   zeros(size(H_lon,1),2)];              % Augmented A matrix
+Bbar_lon = [B_lon;...
+            zeros(2,size(B_lon,2))];                      % Augmented B matrix
+        
 [P.K,~,~] = lqr(Abar_lon, Bbar_lon, Q, R);    % Solve for LQR parameters
--P.K
 
 
 						  
